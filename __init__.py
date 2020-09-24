@@ -28,6 +28,19 @@ def lrange(*args, **kwargs):
 def lchain(*args):
     return list(chain(*args))
 
+def lmap(fn, iterable):
+    return list(map(fn, iterable))
+
+def groupby_(list, key=None):
+    if callable(key):
+        keys = map(key, list)
+    elif key is None:
+        keys = list
+    groups = defaultdict(list)
+    for k, v in zip(keys, list):
+        groups[k].append(v)
+    return groups
+
 class Dict(dict if version.major == 3 and version.minor >= 6 else OrderedDict):
     def __add__(self, d):
         return Dict(**self).merge(d)
@@ -202,6 +215,10 @@ def attributes(obj, print=True):
         from pprint import pprint
         pprint(attrs)
     return attrs
+
+def show(obj):
+    import inspect
+    print(inspect.print_source(obj))
 
 def import_module(module_name, module_path):
     import imp
@@ -514,6 +531,24 @@ class Path(str):
     def save(self, obj):
         return eval('self.save_%s' % self._ext)(obj)
 
+    def replace_txt(self, replacements, dst=None):
+        content = self.load_txt()
+        for k, v in replacements.items():
+            content = content.replace(k, v)
+        (dst or self).save_txt(content)
+
+    def update_dict(self, updates={}, vars=[], unvars=[], dst=None):
+        d = self.load()
+        for k in vars:
+            d[k] = True
+        for k in unvars:
+            d.pop(k, None)
+        d.update(updates)
+        (dst or self).save(d)
+
+    def torch_strip(self, dst):
+        self.update_dict(unvars=['opt', 'step'], dst=dst)
+
     def wget(self, link):
         if self.isdir():
             return Path(wget(link, self))
@@ -600,6 +635,9 @@ if flags.sklearn:
 def flatten(x):
     return [z for y in x for z in y]
 
+def split(x, sizes):
+    return np.split(x, np.cumsum(sizes[:-1]))
+
 def recurse(x, fn):
     T = type(x)
     if isinstance(x, dict):
@@ -621,6 +659,10 @@ def smooth(y, box_pts):
     box = np.ones(box_pts) / box_pts
     y_smooth = np.convolve(y, box, mode='same')
     return y_smooth
+
+def gsmooth(y, sigma):
+    from scipy.ndimage.filters import gaussian_filter1d
+    return gaussian_filter1d(y, sigma=sigma)
 
 def normalize(x, eps=1e-8):
     return (x - x.mean()) / x.std()
