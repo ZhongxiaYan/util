@@ -108,7 +108,7 @@ def save_pickle(path, obj):
         pickle.dump(obj, f)
 
 def wget(link, output_dir):
-    cmd = 'wget %s -P %s' % (path, output_dir)
+    cmd = 'wget %s -P %s' % (link, output_dir)
     shell(cmd)
     output_path = Path(output_dir) / os.path.basename(link)
     if not output_path.exists(): raise RuntimeError('Failed to run %s' % cmd)
@@ -333,6 +333,10 @@ def install(pkgs, root):
 class Path(str):
     def __init__(self, path):
         pass
+
+    @classmethod
+    def env(cls, var):
+        return Path(os.environ[var])
 
     def __add__(self, subpath):
         return Path(str(self) + str(subpath))
