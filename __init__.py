@@ -31,6 +31,12 @@ def lchain(*args):
 def lmap(fn, iterable):
     return list(map(fn, iterable))
 
+def lif(keep, *x):
+    return x if keep else []
+
+def dif(keep, **kwargs):
+    return kwargs if keep else {}
+
 def groupby_(list, key=None):
     if callable(key):
         keys = map(key, list)
