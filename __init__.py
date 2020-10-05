@@ -391,6 +391,10 @@ class Path(str):
         os.makedirs(self, exist_ok=True)
         return self
 
+    def dir_mk(self):
+        self._up.mk()
+        return self
+
     def rm(self):
         if self.isfile() or self.islink():
             os.remove(self)
@@ -564,6 +568,23 @@ class Path(str):
             return Path(wget(link, self))
         raise ValueError('Path %s needs to be a directory' % self)
 
+    def replace(self, old, new):
+        return Path(super().replace(old, new))
+
+    def search(self, pattern):
+        return re.search(pattern, self)
+
+    def search_pattern(self, pattern):
+        return self.search(pattern).group()
+
+    def search_groups(self, pattern):
+        return self.search(pattern).groups()
+
+    def search_group(self, pattern):
+        return self.search_groups(pattern)[0]
+
+    def findall(self, pattern):
+        return re.findall(pattern, self)
 
 class Namespace(Dict):
     def __init__(self, *args, **kwargs):
