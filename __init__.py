@@ -378,6 +378,19 @@ class Path(str):
     def glob(self, glob_str):
         return [Path(p) for p in glob(self / glob_str, recursive=True)]
 
+    def re(self, re_pattern):
+        subpatterns = lmap(re.compile, re_pattern.split('/'))
+        matches = []
+        dirs, files = self.ls()
+        for pattern in subpatterns[:-1]:
+            new_dirs, new_files = [], []
+            for d in filter(lambda x: pattern.fullmatch(x._name), dirs):
+                d_dirs, d_files = d.ls()
+                new_dirs.extend(d_dirs)
+                new_files.extend(d_files)
+            dirs, files = new_dirs, new_files
+        return sorted(filter(lambda x: subpatterns[-1].fullmatch(x._name), dirs + files))
+
     def recurse(self, dir_fn=None, file_fn=None):
         if dir_fn is not None:
             dir_fn(self)
