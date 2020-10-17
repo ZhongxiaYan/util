@@ -477,14 +477,22 @@ class Path(str):
 
     @property
     def _name(self):
-        return os.path.basename(self)
+        return Path(os.path.basename(self))
+
+    @property
+    def _stem(self):
+        return Path(os.path.splitext(self)[0])
+
+    @property
+    def _basestem(self):
+        new = self._stem
+        while new != self:
+            new, self = new._stem, new
+        return new
 
     @property
     def _ext(self):
-        frags = self._name.rsplit('.', 1)
-        if len(frags) == 1:
-            return ''
-        return frags[1]
+        return Path(os.path.splitext(self)[1])
 
     extract = extract
     load_json = load_json
