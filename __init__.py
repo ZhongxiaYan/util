@@ -548,10 +548,10 @@ class Path(str):
         writer.write(self)
 
     def load(self):
-        return eval('self.load_%s' % self._ext)()
+        return eval('self.load_%s' % self._ext[1:])()
 
     def save(self, obj):
-        return eval('self.save_%s' % self._ext)(obj)
+        return eval('self.save_%s' % self._ext[1:])(obj)
 
     def replace_txt(self, replacements, dst=None):
         content = self.load_txt()
