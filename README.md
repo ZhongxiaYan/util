@@ -1,3 +1,6 @@
-# U
+# Util
 
-[Download](https://github.com/zhongxiayan/util)
+## Installation
+`pip install -r requirements.txt`
+
+Follow instructions on [pytorch.org](pytorch.org) to install PyTorch.

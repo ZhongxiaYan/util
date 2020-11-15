@@ -28,8 +28,8 @@ def lrange(*args, **kwargs):
 def lchain(*args):
     return list(chain(*args))
 
-def lmap(fn, iterable):
-    return list(map(fn, iterable))
+def lmap(fn, *iterables):
+    return [fn(*xs) for xs in zip(*iterables)]
 
 def lif(keep, *x):
     return x if keep else []
@@ -589,7 +589,7 @@ class Path(str):
             return Path(wget(link, self))
         raise ValueError('Path %s needs to be a directory' % self)
 
-    def replace(self, old, new):
+    def replace(self, old, new=''):
         return Path(super().replace(old, new))
 
     def search(self, pattern):
