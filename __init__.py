@@ -319,7 +319,7 @@ def install(pkgs, root):
         tmp = Path('tmp')
         shell('mkdir tmp && cd tmp && apt download %s' % pkg)
         for deb in tmp.glob('*.deb'):
-            shell('dpkg -x %s %s' % (deb, root))
+            shell('dpkg -x %s .' % deb)
             print('Installing %s with %s' % (pkg, deb))
             self_installed.add(pkg)
         tmp.rm()
