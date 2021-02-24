@@ -37,6 +37,9 @@ def lif(keep, *x):
 def dif(keep, **kwargs):
     return kwargs if keep else {}
 
+def flatten(x):
+    return [z for y in x for z in y]
+
 def groupby_(xs, key=None):
     if callable(key):
         keys = map(key, xs)
@@ -238,9 +241,12 @@ def str2num(s):
 
 def parse_options(defs, *options):
     """
+    Each option takes the form of a string keyvalue. Match keyvalue by the following precedence in defs
     defs: {
-        keyvalue: {config key: config value, ...},
-        match_str: v -> {config key: config value, ...},
+        keyvalue: {config_key: config_value, ...},
+        key: None, # implicitly {key: value}
+        key: config_key, # implicitly {config_key: value}
+        key: v -> {config_key: config_value, ...},
         ...
     }
     options: [key1value1, key2value2_key3value3, ...]
@@ -252,8 +258,14 @@ def parse_options(defs, *options):
         if o in defs:
             kwargs.update(defs[o])
         else:
-            k, v = re.match('([a-zA-Z]+)(.+)', o).groups()
-            kwargs.update(defs[k](str2num(v)))
+            k, v = re.match('([a-zA-Z]*)(.+)', o).groups()
+            fn_str_none = defs[k]
+            if fn_str_none is None:
+                kwargs.update({k: v})
+            elif isinstance(fn_str_none, str):
+                kwargs.update({fn_str_none: v})
+            else:
+                kwargs.update(fn_str_none(str2num(v)))
     return name, kwargs
 
 def sbatch(cpu=1, gpu=False):
@@ -684,9 +696,6 @@ except ImportError:
 
 if flags.sklearn:
     from sklearn.metrics import roc_auc_score as auroc, average_precision_score as auprc, roc_curve as roc, precision_recall_curve as prc, accuracy_score as accuracy
-
-def flatten(x):
-    return [z for y in x for z in y]
 
 def split(x, sizes):
     return np.split(x, np.cumsum(sizes[:-1]))
