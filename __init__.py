@@ -1,6 +1,6 @@
 from __future__ import absolute_import, print_function
 
-import subprocess, sys, os, re, tempfile, zipfile, gzip, io, shutil, string, random, itertools, pickle, json, yaml, gc
+import subprocess, sys, os, re, tempfile, zipfile, gzip, io, shutil, string, random, itertools, pickle, json, yaml, gc, inspect
 from itertools import chain, groupby, islice, product, permutations, combinations
 from datetime import datetime
 from time import time
@@ -37,13 +37,13 @@ def lif(keep, *x):
 def dif(keep, **kwargs):
     return kwargs if keep else {}
 
-def groupby_(list, key=None):
+def groupby_(xs, key=None):
     if callable(key):
-        keys = map(key, list)
+        keys = map(key, xs)
     elif key is None:
-        keys = list
+        keys = xs
     groups = defaultdict(list)
-    for k, v in zip(keys, list):
+    for k, v in zip(keys, xs):
         groups[k].append(v)
     return groups
 
@@ -72,6 +72,7 @@ class Dict(dict if version.major == 3 and version.minor >= 6 else OrderedDict):
             return Dict((k, mapper[v]) for k, v in self.items())
 
 def parse_dot(d):
+    """ Convert dictionary with dot keys to a hierarchical dictionary """
     ks = [(k, v) for k, v in d.items() if '.' in k]
     for k, v in ks:
         del d[k]
@@ -214,61 +215,59 @@ def git_state(dir=None):
     os.chdir(cwd)
     return base_commit, diff, status
 
-def attributes(obj, print=True):
-    import inspect
-    attrs = inspect.getmembers(obj, lambda a: not inspect.isroutine(a))
-    if print:
-        from pprint import pprint
-        pprint(attrs)
-    return attrs
+def attrs(obj):
+    for k, v in inspect.getmembers(obj):
+        if inspect.isfunction(v) or inspect.ismethod(v):
+            print(f'{v.__name__}{inspect.signature(v)}')
+        elif not callable(v) and not k.startswith('__'):
+            print(k, v)
 
-def show(obj):
-    import inspect
-    print(inspect.print_source(obj))
+def source(obj):
+    print(inspect.getsource(obj))
 
 def import_module(module_name, module_path):
     import imp
     module = imp.load_source(module_name, module_path)
     return module
 
-def shorten(names, sep='_', new_sep='_'):
-    names = [n.split(sep) for n in names]
-    levels = [*itertools.zip_longest(*names, fillvalue='')]
-    def rename(level):
-        uniq = np.unique(level)
-        keep_len = 1
-        while True:
-            new_uniq = np.unique([u[:keep_len] for u in uniq])
-            if len(new_uniq) == len(uniq):
-                mapping = dict(zip(uniq, new_uniq))
-                return [mapping[x] for x in level]
-            keep_len += 1
-    new_levels = [*map(rename, levels)]
-    return [new_sep.join(tup).rstrip(new_sep) for tup in zip(*new_levels)]
+def str2num(s):
+    try: return int(s)
+    except:
+        try: return float(s)
+        except: return s
 
-t_ = {}
-def profile_start(*names):
-    for name in names or ['anon']:
-        t_[name] = [time()]
+def parse_options(defs, *options):
+    """
+    defs: {
+        keyvalue: {config key: config value, ...},
+        match_str: v -> {config key: config value, ...},
+        ...
+    }
+    options: [key1value1, key2value2_key3value3, ...]
+    """
+    options = flatten([x.split('_') for x in options if x])
+    name = '_'.join(options)
+    kwargs = {}
+    for o in options:
+        if o in defs:
+            kwargs.update(defs[o])
+        else:
+            k, v = re.match('([a-zA-Z]+)(.+)', o).groups()
+            kwargs.update(defs[k](str2num(v)))
+    return name, kwargs
 
-def profile(obj, name='anon'):
-    t_[name].append(time())
-    return obj
+def sbatch(cpu=1, gpu=False):
+    return f"""#!/bin/sh
 
-def profile_i(iterable, name='anon'):
-    for obj in iterable:
-        yield profile(obj, name=name)
+#SBATCH -o output-%j.log
+#SBATCH --time=72:00:00          # total run time limit (HH:MM:SS)
+#SBATCH -N 1                     # number of nodes
+#SBATCH -n 1                     # number of tasks
+#SBATCH -c {cpu}                     # number of cpu per task
+{'#SBATCH --gres=gpu:volta:1' if gpu else ''}
 
-def profile_end(name='anon'):
-    times = t_.pop(name)
-    t0 = times[0]
-    times = [t - t0 for t in times[1:]]
-    return np.array(times)
-
-def debugger():
-    import ptvsd
-    ptvsd.enable_attach()
-    ptvsd.wait_for_attach()
+source ~/.bash_profile
+"""
 
 def get_time_log_path():
     return datetime.now().isoformat().replace(':', '_').rsplit('.')[0] + '.log'
@@ -337,12 +336,13 @@ def install(pkgs, root):
     os.chdir(old_cwd)
 
 class Path(str):
-    def __init__(self, path):
-        pass
-
+    """"""
     @classmethod
     def env(cls, var):
         return Path(os.environ[var])
+
+    def __init__(self, path):
+        pass
 
     def __add__(self, subpath):
         return Path(str(self) + str(subpath))
@@ -379,6 +379,7 @@ class Path(str):
         return [Path(p) for p in glob(self / glob_str, recursive=True)]
 
     def re(self, re_pattern):
+        """ Similar to .glob but uses regex pattern """
         subpatterns = lmap(re.compile, re_pattern.split('/'))
         matches = []
         dirs, files = self.ls()
@@ -392,6 +393,7 @@ class Path(str):
         return sorted(filter(lambda x: subpatterns[-1].fullmatch(x._name), dirs + files))
 
     def recurse(self, dir_fn=None, file_fn=None):
+        """ Recursively apply dir_fn and file_fn to all subdirs and files in directory """
         if dir_fn is not None:
             dir_fn(self)
         dirs, files = self.ls()
@@ -472,7 +474,6 @@ class Path(str):
                 return path
             i += 1
 
-
     @property
     def _(self):
         return str(self)
@@ -484,7 +485,7 @@ class Path(str):
     @property
     def _up(self):
         path = os.path.dirname(self.rstrip('/'))
-        if path is '':
+        if path == '':
             path = os.path.dirname(self._real.rstrip('/'))
         return Path(path)
 
@@ -510,8 +511,8 @@ class Path(str):
     extract = extract
     load_json = load_json
     save_json = save_json
-    load_txt = load_text
-    save_txt = save_text
+    load_txt = load_sh = load_text
+    save_txt = save_sh = save_text
     load_p = load_pickle
     save_p = save_pickle
 
@@ -656,7 +657,7 @@ try:
     if flags.pandas:
         import pandas as pd
         def _sel(self, col, value):
-            if type(value) == list:
+            if isinstance(value, list):
                 return self[self[col].isin(value)]
             return self[self[col] == value]
         pd.DataFrame.sel = _sel

@@ -76,6 +76,226 @@ class Config(Namespace):
             self.path.save(from_numpy(self.attrs_save))
         return self
 
+    @classmethod
+    def from_args(cls, *globals_locals):
+        import argparse
+        parser = argparse.ArgumentParser(description='Model arguments')
+        parser.add_argument('res', type=Path, help='Result directory')
+        parser.add_argument('kwargs', nargs='*', help='Extra arguments that goes into the config')
+
+        args = parser.parse_args()
+
+        kwargs = {}
+        for kv in args.kwargs:
+            splits = kv.split('=')
+            if len(splits) == 1:
+                v = True
+            else:
+                v = splits[1]
+                try:
+                    v = eval(v, *globals_locals)
+                except (SyntaxError, NameError):
+                    pass
+            kwargs[splits[0]] = v
+
+        return cls(args.res, **kwargs).save()
+
+    def try_save_commit(self):
+        base_commit, diff, status = git_state()
+
+        save_dir = (self.res / 'commit').mk()
+        (save_dir / 'hash.txt').save(base_commit)
+        (save_dir / 'diff.txt').save(diff)
+        (save_dir / 'status.txt').save(status)
+        return self
+
+    @main_only
+    def log(self, text):
+        logger(self.res if self.logger else None)(text)
+
+    ### Train result saving ###
+
+    @property
+    def train_results(self):
+        return self.res / 'train_results.csv'
+
+    def load_train_results(self):
+        if self.train_results.exists():
+            return pd.read_csv(self.train_results, index_col=0)
+        return None
+
+    @main_only
+    def save_train_results(self, results):
+        results.to_csv(self.train_results, float_format='%.6g')
+
+    ### Set stopped early ###
+
+    @property
+    def stopped_early(self):
+        return self.res / 'stopped_early'
+
+    @main_only
+    def set_stopped_early(self):
+        self.stopped_early.save_txt('')
+
+    ### Set training state ###
+
+    @property
+    def training(self):
+        return self.res / 'is_training'
+
+    @main_only
+    def set_training(self, is_training):
+        if is_training:
+            if self.main and self.training.exists():
+                self.log('Another training is found, continue (yes/n)?')
+                ans = input('> ')
+                if ans != 'yes':
+                    exit()
+            self.training.save_txt('')
+        else:
+            self.training.rm()
+
+    ### Model loading ###
+
+    def init_model(self, net, opt=None, step='max', train=True):
+        if train:
+            assert not self.training.exists(), 'Training already exists'
+        # configure parallel training
+        devices = os.environ.get('CUDA_VISIBLE_DEVICES')
+        self.n_gpus = 0 if self.device == 'cpu' else 1 if self.device.startswith('cuda:') else len(get_gpu_info()) if devices is None else len(devices.split(','))
+        can_parallel = self.n_gpus > 1
+        self.setdefaults(distributed=can_parallel) # use distributeddataparallel
+        self.setdefaults(parallel=can_parallel and not self.distributed) # use dataparallel
+        self.local_rank = 0
+        self.world_size = 1 # number of processes
+        if self.distributed:
+            self.local_rank = int(os.environ['LOCAL_RANK']) # rank of the current process
+            self.world_size = int(os.environ['WORLD_SIZE'])
+            assert self.world_size == self.n_gpus
+            torch.cuda.set_device(self.local_rank)
+            torch.distributed.init_process_group(backend='nccl', init_method='env://')
+            self.main = self.local_rank == 0
+
+        net.to(self.device)
+        if train and not self.disable_amp:
+            # configure mixed precision
+            net, opt = amp.initialize(net, opt, opt_level=self.opt_level, loss_scale=self.get('loss_scale'), verbosity=0 if self.opt_level == 'O0' else 1)
+        step = self.set_state(net, opt=opt, step=step)
+
+        if self.distributed:
+            import apex
+            net = apex.parallel.DistributedDataParallel(net)
+        elif self.parallel:
+            net = nn.DataParallel(net)
+
+        if train:
+            net.train()
+            return net, opt, step
+        else:
+            net.eval()
+            return net, step
+
+    def load_model(self, step='best', train=False):
+        '''
+        step can be 'best', 'max', an integer, or None
+        '''
+        model = import_module('model', str(self.model))
+        net = model.get_net(self)
+        opt = model.get_opt(self, net) if train else None
+        return self.init_model(net, opt=opt, step=step, train=train)
+
+    @property
+    def models(self):
+        return (self.res / 'models').mk()
+
+    def model_save(self, step):
+        return self.models / ('model-%s.pth' % step)
+
+    def model_step(self, path):
+        m = re.match('.+/model-(\d+)\.pth', path)
+        if m:
+            return int(m.groups()[0])
+
+    @property
+    def model_best(self):
+        return self.models / 'best_model.pth'
+
+    @main_only
+    def link_model_best(self, model_save):
+        self.model_best.rm().link(Path(model_save).rel(self.models))
+
+    def get_saved_model_steps(self):
+        _, save_paths = self.models.ls()
+        if len(save_paths) == 0:
+            return []
+        return sorted([x for x in map(self.model_step, save_paths) if x is not None])
+
+    def set_state(self, net, opt=None, step='max', path=None):
+        state = self.load_state(step=step, path=path)
+        if state is None:
+            return 0
+        if self.get('append_module_before_load'):
+            state['net'] = OrderedDict(('module.' + k, v) for k, v in state['net'].items())
+        net.load_state_dict(state['net'])
+        if opt:
+            if 'opt' in state:
+                opt.load_state_dict(state['opt'])
+            else:
+                self.log('No state for optimizer to load')
+        if 'amp' in state and self.opt_level != 'O0':
+            amp.load_state_dict(state['amp'])
+        return state.get('step', 0)
+
+    @main_only
+    def get_state(self, net, opt, step):
+        try:
+            net_dict = net.module.state_dict()
+        except AttributeError:
+            net_dict = net.state_dict()
+        state = dict(step=step, net=net_dict, opt=opt.state_dict())
+        try:
+            state['amp'] = amp.state_dict()
+        except:
+            pass
+        return to_torch(state, device='cpu')
+
+    def load_state(self, step='max', path=None):
+        '''
+        step: best, max, integer, None if path is specified
+        path: None if step is specified
+        '''
+        if path is None:
+            if step == 'best':
+                path = self.model_best
+            else:
+                if step == 'max':
+                    steps = self.get_saved_model_steps()
+                    if len(steps) == 0:
+                        return None
+                    step = max(steps)
+                path = self.model_save(step)
+        save_path = Path(path)
+        if save_path.exists():
+            return to_torch(torch.load(save_path), device=self.device)
+        return None
+
+    @main_only
+    def save_state(self, step, state, clean=True, link_best=False):
+        save_path = self.model_save(step)
+        if save_path.exists():
+            return save_path
+        torch.save(state, save_path)
+        self.log('Saved model %s at step %s' % (save_path, step))
+        if clean and self.get('max_save'):
+            self.clean_models(keep=self.max_save)
+        if link_best:
+            self.link_model_best(save_path)
+            self.log('Linked %s to new saved model %s' % (self.model_best, save_path))
+        return save_path
+
+    ### Utility methods for manipulating experiments ###
+
     def clone(self):
         return self._clone().save()
 
@@ -104,30 +324,6 @@ class Config(Namespace):
         return Config(new_res).var(**merged)
 
     @classmethod
-    def from_args(cls):
-        import argparse
-        parser = argparse.ArgumentParser(description='Model arguments')
-        parser.add_argument('res', type=Path, help='Result directory')
-        parser.add_argument('kwargs', nargs='*', help='Extra arguments that goes into the config')
-
-        args = parser.parse_args()
-
-        kwargs = {}
-        for kv in args.kwargs:
-            splits = kv.split('=')
-            if len(splits) == 1:
-                v = True
-            else:
-                v = splits[1]
-                try:
-                    v = eval(v)
-                except (SyntaxError, NameError):
-                    pass
-            kwargs[splits[0]] = v
-
-        return cls(args.res, **kwargs).save()
-
-    @classmethod
     def load_all(cls, *directories, df=False, kwargs={}):
         configs = []
         def dir_fn(d):
@@ -150,20 +346,22 @@ class Config(Namespace):
                 config.res.rm()
                 self.log('Removed %s' % config.res)
 
-    def try_save_commit(self):
-        base_commit, diff, status = git_state()
-
-        save_dir = (self.res / 'commit').mk()
-        (save_dir / 'hash.txt').save(base_commit)
-        (save_dir / 'diff.txt').save(diff)
-        (save_dir / 'status.txt').save(status)
-        return self
-
     @main_only
-    def log(self, text):
-        logger(self.res if self.logger else None)(text)
+    def clean_models(self, keep=5):
+        model_steps = self.get_saved_model_steps()
+        delete = len(model_steps) - keep
+        keep_paths = [self.model_best._real, self.model_save(model_steps[-1])._real]
+        for e in model_steps:
+            if delete <= 0:
+                break
+            path = self.model_save(e)._real
+            if path in keep_paths:
+                continue
+            path.rm()
+            delete -= 1
+            self.log('Removed model %s' % path.rel(self.res))
 
-
+class Supervised(Config):
     def on_train_start(self, s):
         step = s.step
         s.step_max = self.steps
@@ -318,193 +516,3 @@ class Config(Namespace):
             cmd.append('device=cuda:%s' % gpu)
 
         return cd + ' '.join(cmd)
-
-    def init_model(self, net, opt=None, step='max', train=True):
-        if train:
-            assert not self.training.exists(), 'Training already exists'
-        # configure parallel training
-        devices = os.environ.get('CUDA_VISIBLE_DEVICES')
-        self.n_gpus = 0 if self.device == 'cpu' else 1 if self.device.startswith('cuda:') else len(get_gpu_info()) if devices is None else len(devices.split(','))
-        can_parallel = self.n_gpus > 1
-        self.setdefaults(distributed=can_parallel) # use distributeddataparallel
-        self.setdefaults(parallel=can_parallel and not self.distributed) # use dataparallel
-        self.local_rank = 0
-        self.world_size = 1 # number of processes
-        if self.distributed:
-            self.local_rank = int(os.environ['LOCAL_RANK']) # rank of the current process
-            self.world_size = int(os.environ['WORLD_SIZE'])
-            assert self.world_size == self.n_gpus
-            torch.cuda.set_device(self.local_rank)
-            torch.distributed.init_process_group(backend='nccl', init_method='env://')
-            self.main = self.local_rank == 0
-
-        net.to(self.device)
-        if train and not self.disable_amp:
-            # configure mixed precision
-            net, opt = amp.initialize(net, opt, opt_level=self.opt_level, loss_scale=self.get('loss_scale'), verbosity=0 if self.opt_level == 'O0' else 1)
-        step = self.set_state(net, opt=opt, step=step)
-
-        if self.distributed:
-            import apex
-            net = apex.parallel.DistributedDataParallel(net)
-        elif self.parallel:
-            net = nn.DataParallel(net)
-
-        if train:
-            net.train()
-            return net, opt, step
-        else:
-            net.eval()
-            return net, step
-
-    def load_model(self, step='best', train=False):
-        '''
-        step can be 'best', 'max', an integer, or None
-        '''
-        model = import_module('model', str(self.model))
-        net = model.get_net(self)
-        opt = model.get_opt(self, net) if train else None
-        return self.init_model(net, opt=opt, step=step, train=train)
-
-    @property
-    def train_results(self):
-        return self.res / 'train_results.csv'
-
-    def load_train_results(self):
-        if self.train_results.exists():
-            return pd.read_csv(self.train_results, index_col=0)
-        return None
-
-    @main_only
-    def save_train_results(self, results):
-        results.to_csv(self.train_results, float_format='%.6g')
-
-
-    @property
-    def stopped_early(self):
-        return self.res / 'stopped_early'
-
-    @main_only
-    def set_stopped_early(self):
-        self.stopped_early.save_txt('')
-
-
-    @property
-    def training(self):
-        return self.res / 'is_training'
-
-    @main_only
-    def set_training(self, is_training):
-        if is_training:
-            if self.main and self.training.exists():
-                self.log('Another training is found, continue (yes/n)?')
-                ans = input('> ')
-                if ans != 'yes':
-                    exit()
-            self.training.save_txt('')
-        else:
-            self.training.rm()
-
-    @property
-    def models(self):
-        return (self.res / 'models').mk()
-
-    def model_save(self, step):
-        return self.models / ('model-%s.pth' % step)
-
-    def model_step(self, path):
-        m = re.match('.+/model-(\d+)\.pth', path)
-        if m:
-            return int(m.groups()[0])
-
-    @property
-    def model_best(self):
-        return self.models / 'best_model.pth'
-
-    @main_only
-    def link_model_best(self, model_save):
-        self.model_best.rm().link(Path(model_save).rel(self.models))
-
-    def get_saved_model_steps(self):
-        _, save_paths = self.models.ls()
-        if len(save_paths) == 0:
-            return []
-        return sorted([x for x in map(self.model_step, save_paths) if x is not None])
-
-    @main_only
-    def clean_models(self, keep=5):
-        model_steps = self.get_saved_model_steps()
-        delete = len(model_steps) - keep
-        keep_paths = [self.model_best._real, self.model_save(model_steps[-1])._real]
-        for e in model_steps:
-            if delete <= 0:
-                break
-            path = self.model_save(e)._real
-            if path in keep_paths:
-                continue
-            path.rm()
-            delete -= 1
-            self.log('Removed model %s' % path.rel(self.res))
-
-    def set_state(self, net, opt=None, step='max', path=None):
-        state = self.load_state(step=step, path=path)
-        if state is None:
-            return 0
-        if self.get('append_module_before_load'):
-            state['net'] = OrderedDict(('module.' + k, v) for k, v in state['net'].items())
-        net.load_state_dict(state['net'])
-        if opt:
-            if 'opt' in state:
-                opt.load_state_dict(state['opt'])
-            else:
-                self.log('No state for optimizer to load')
-        if 'amp' in state and self.opt_level != 'O0':
-            amp.load_state_dict(state['amp'])
-        return state.get('step', 0)
-
-    @main_only
-    def get_state(self, net, opt, step):
-        try:
-            net_dict = net.module.state_dict()
-        except AttributeError:
-            net_dict = net.state_dict()
-        state = dict(step=step, net=net_dict, opt=opt.state_dict())
-        try:
-            state['amp'] = amp.state_dict()
-        except:
-            pass
-        return to_torch(state, device='cpu')
-
-    def load_state(self, step='max', path=None):
-        '''
-        step: best, max, integer, None if path is specified
-        path: None if step is specified
-        '''
-        if path is None:
-            if step == 'best':
-                path = self.model_best
-            else:
-                if step == 'max':
-                    steps = self.get_saved_model_steps()
-                    if len(steps) == 0:
-                        return None
-                    step = max(steps)
-                path = self.model_save(step)
-        save_path = Path(path)
-        if save_path.exists():
-            return to_torch(torch.load(save_path), device=self.device)
-        return None
-
-    @main_only
-    def save_state(self, step, state, clean=True, link_best=False):
-        save_path = self.model_save(step)
-        if save_path.exists():
-            return save_path
-        torch.save(state, save_path)
-        self.log('Saved model %s at step %s' % (save_path, step))
-        if clean and self.get('max_save'):
-            self.clean_models(keep=self.max_save)
-        if link_best:
-            self.link_model_best(save_path)
-            self.log('Linked %s to new saved model %s' % (self.model_best, save_path))
-        return save_path
