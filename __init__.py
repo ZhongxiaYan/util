@@ -258,7 +258,7 @@ def parse_options(defs, *options):
         if o in defs:
             kwargs.update(defs[o])
         else:
-            k, v = re.match('([a-zA-Z]*)(.+)', o).groups()
+            k, v = re.match('([a-zA-Z]*)(.*)', o).groups()
             fn_str_none = defs[k]
             if fn_str_none is None:
                 kwargs.update({k: v})
