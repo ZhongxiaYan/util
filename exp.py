@@ -100,8 +100,8 @@ class Config(Namespace):
 
         return cls(args.res, **kwargs).save()
 
-    def try_save_commit(self):
-        base_commit, diff, status = git_state()
+    def try_save_commit(self, base_dir=None):
+        base_commit, diff, status = git_state(base_dir)
 
         save_dir = (self.res / 'commit').mk()
         (save_dir / 'hash.txt').save(base_commit)
