@@ -98,7 +98,7 @@ def format_json(dict_):
     return json.dumps(dict_, indent=4, sort_keys=True)
 
 def format_yaml(dict_):
-    dict_ = recurse(dict_, lambda x: x._ if type(x) is Path else dict(x) if type(x) is Dict else x)
+    dict_ = recurse(dict_, lambda x: x._ if isinstance(x, Path) else dict(x) if isinstance(x, Dict) else x)
     return yaml.dump(dict_)
 
 def load_text(path, encoding='utf-8'):
@@ -194,7 +194,7 @@ def ssh(user, host, cmd, key=None, password=None, terminal=False):
 def shell(cmd, wait=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
     stdout = stdout or subprocess.DEVNULL
     stderr = stderr or subprocess.DEVNULL
-    if type(cmd) != str:
+    if not isinstance(cmd, str):
         cmd = ' '.join(cmd)
     process = subprocess.Popen(cmd, shell=True, stdout=stdout, stderr=stderr)
     if not wait:
@@ -549,7 +549,7 @@ class Path(str):
             return yaml.safe_load(f)
 
     def save_yaml(self, obj):
-        obj = recurse(obj, lambda x: x._ if type(x) is Path else dict(x) if type(x) is Dict else x)
+        obj = recurse(obj, lambda x: x._ if isinstance(x, Path) else dict(x) if isinstance(x, Dict) else x)
         with open(self, 'w') as f:
             yaml.dump(obj, f, default_flow_style=False, allow_unicode=True)
 
@@ -627,7 +627,7 @@ class Namespace(Dict):
     def var(self, *args, **kwargs):
         kvs = Dict()
         for a in args:
-            if type(a) is str:
+            if isinstance(a, str):
                 kvs[a] = True
             else: # a is a dictionary
                 kvs.update(a)
@@ -701,11 +701,10 @@ def split(x, sizes):
     return np.split(x, np.cumsum(sizes[:-1]))
 
 def recurse(x, fn):
-    T = type(x)
     if isinstance(x, dict):
-        return T((k, recurse(v, fn)) for k, v in x.items())
+        return type(x)((k, recurse(v, fn)) for k, v in x.items())
     elif isinstance(x, (list, tuple)):
-        return T(recurse(v, fn) for v in x)
+        return type(x)(recurse(v, fn) for v in x)
     return fn(x)
 
 def from_numpy(x):
@@ -748,7 +747,7 @@ def sorted_segment_maps(segments):
 
 def reindex(df, order=None, rename=None, level=[], axis=0, squeeze=True):
     assert axis in [0, 1]
-    if type(level) is not list:
+    if not isinstance(level, list):
         if order is not None: order = [order]
         if rename is not None: rename = [rename]
         level = [level]
