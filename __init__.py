@@ -276,7 +276,7 @@ def sbatch(cpu=1, gpu=False):
 #SBATCH -N 1                     # number of nodes
 #SBATCH -n 1                     # number of tasks
 #SBATCH -c {cpu}                     # number of cpu per task
-{'#SBATCH --gres=gpu:volta:1' if gpu else ''}
+{'#SBATCH --gres=gpu:volta:1' if gpu else '#SBATCH --constraint xeon-p8'}
 
 source ~/.bash_profile
 """
@@ -428,6 +428,11 @@ class Path(str):
         elif self.isdir():
             shutil.rmtree(self)
         return self
+
+    def unlink(self):
+        os.unlink(self)
+        return self
+
 
     def mv(self, dest):
         shutil.move(self, dest)
