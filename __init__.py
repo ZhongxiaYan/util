@@ -42,11 +42,11 @@ def flatten(x):
 
 def groupby_(xs, key=None):
     if callable(key):
-        keys = map(key, xs)
+        key = map(key, xs)
     elif key is None:
-        keys = xs
+        key = xs
     groups = defaultdict(list)
-    for k, v in zip(keys, xs):
+    for k, v in zip(key, xs):
         groups[k].append(v)
     return groups
 
@@ -737,6 +737,10 @@ def inverse_map(arr):
     inv_map = np.zeros(len(arr))
     inv_map[arr] = np.arange(len(arr))
     return inv_map
+
+def pad_arrays(arrs, value):
+    max_len = max(len(x) for x in arrs)
+    return np.array([np.concatenate([x, np.full(max_len - len(x), value)]) for x in arrs])
 
 def sorted_segment_maps(segments):
     r = Namespace()
