@@ -31,6 +31,9 @@ def lchain(*args):
 def lmap(fn, *iterables):
     return [fn(*xs) for xs in zip(*iterables)]
 
+def sif(keep, str):
+    return str if keep else ''
+
 def lif(keep, *x):
     return x if keep else []
 
@@ -98,7 +101,7 @@ def format_json(dict_):
     return json.dumps(dict_, indent=4, sort_keys=True)
 
 def format_yaml(dict_):
-    dict_ = recurse(dict_, lambda x: x._ if isinstance(x, Path) else dict(x) if isinstance(x, Dict) else x)
+    dict_ = recurse(dict_, lambda x: x.str if isinstance(x, Path) else dict(x) if isinstance(x, Dict) else x)
     return yaml.dump(dict_)
 
 def load_text(path, encoding='utf-8'):
@@ -298,6 +301,49 @@ def log(text):
         with open(_log_path, 'a') as f:
             f.write(text)
             f.write('\n')
+class Logger:
+    def __init__(self, base_name, prev_time=0):
+        self.start_time = time() - prev_time
+        self.save_path = base_name + f'_{datetime.now().isoformat(timespec="second")}.csv'
+        self.results = []
+        self.columns_saved = []
+        self.n_prev_saved = 0
+
+    def log(self, step, result):
+        total_time = time() - self.start_time
+        result = {k: v for k, v in result.items() if k.startswith('_') or v is not None}
+        result['total_time'] = total_time
+
+        is_delim = lambda k: k[0].startswith('_')
+        result_groups = [list(group) for is_del, group in groupby(result.items(), is_delim) if not is_del]
+        line_width = terminal_width()
+        pre = ' | '.join([datetime.now().isoformat(timespec='seconds'), f'step {step}'])
+        pre_w = len(pre)
+        shortest_num = lambda v: str1 if len(str1 := f'{v}') <= len(str2 := f'{v:.3g}') else str2
+        for group in result_groups:
+            stats = [f'{k} {v}' if isinstance(v, str) else f'{k} {shortest_num(v)}' for k, v in group]
+            curr_w = pre_w + 3
+            i_start = 0
+            for i, w in enumerate(map(len, stats)):
+                if curr_w + w > line_width:
+                    print(' | '.join([pre, *stats[i_start:]]))
+                    i_start = i
+                    curr_w, pre = pre_w + 3, ' ' * pre_w
+            print(' | '.join([pre, *stats[i_start:]]))
+            pre = ' ' * pre_w
+        sys.stdout.flush()
+        result = dict(step=step, **{k: v for k, v in result.items() if not k.startswith('_')})
+        self.results.append(result)
+
+    def save(self):
+        results, columns_saved, n_prev_saved = self.results, self.columns_saved, self.n_prev_saved
+        df_new = pd.DataFrame(results[n_prev_saved:])
+        if n_prev_saved == 0 or len(set(df_new.columns) ^ set(columns_saved)):
+            df_full = pd.DataFrame(results)
+            df_full.to_csv(self.save_path, header=True, mode='w', index=False)
+            self.columns_saved = list(df_full.columns)
+        else:
+            df_new[self.columns_saved].to_csv(self.save_path, header=False, mode='a', index=False)
 
 def installed(pkg):
     out, err = shell('dpkg -l %s' % pkg)
@@ -339,7 +385,7 @@ def install(pkgs, root):
     for x in lib, lib / 'x86_64-linux-gnu':
         brokens = x.lslinks(exist=False)
         for broken in brokens:
-            real = real_root / broken._up / os.readlink(broken)
+            real = real_root / broken.parent / os.readlink(broken)
             if real.exists():
                 broken.link(real, force=True)
                 print('Fixing broken link to be %s -> %s' % (broken, real))
@@ -363,7 +409,7 @@ class Path(str):
         return Path(os.path.join(str(self), str(subpath)))
 
     def __floordiv__(self, subpath):
-        return (self / subpath)._
+        return (self / subpath).str
 
     def ls(self, show_hidden=True, dir_only=False, file_only=False):
         subpaths = [Path(self / subpath) for subpath in os.listdir(self) if show_hidden or not subpath.startswith('.')]
@@ -397,12 +443,12 @@ class Path(str):
         dirs, files = self.ls()
         for pattern in subpatterns[:-1]:
             new_dirs, new_files = [], []
-            for d in filter(lambda x: pattern.fullmatch(x._name), dirs):
+            for d in filter(lambda x: pattern.fullmatch(x.name), dirs):
                 d_dirs, d_files = d.ls()
                 new_dirs.extend(d_dirs)
                 new_files.extend(d_files)
             dirs, files = new_dirs, new_files
-        return sorted(filter(lambda x: subpatterns[-1].fullmatch(x._name), dirs + files))
+        return sorted(filter(lambda x: subpatterns[-1].fullmatch(x.name), dirs + files))
 
     def recurse(self, dir_fn=None, file_fn=None):
         """ Recursively apply dir_fn and file_fn to all subdirs and files in directory """
@@ -418,9 +464,10 @@ class Path(str):
         os.makedirs(self, exist_ok=True)
         return self
 
-    def dir_mk(self):
-        self._up.mk()
+    def mk_parent(self):
+        self.parent.mk()
         return self
+    dir_mk = mk_parent
 
     def rm(self):
         if self.isfile() or self.islink():
@@ -476,7 +523,7 @@ class Path(str):
         return Path(os.path.relpath(self, start=start))
 
     def clone(self):
-        name = self._name
+        name = self.name
         match = re.search('__([0-9]+)$', name)
         if match is None:
             base = self + '__'
@@ -492,38 +539,59 @@ class Path(str):
             i += 1
 
     @property
-    def _(self):
+    def str(self):
         return str(self)
+    @property
+    def _(self):
+        return self.str
 
+    @property
+    def real(self):
+        return Path(os.path.realpath(os.path.expanduser(self)))
     @property
     def _real(self):
-        return Path(os.path.realpath(os.path.expanduser(self)))
+        return self.real
 
     @property
-    def _up(self):
+    def parent(self):
         path = os.path.dirname(self.rstrip('/'))
         if path == '':
-            path = os.path.dirname(self._real.rstrip('/'))
+            path = os.path.dirname(self.real.rstrip('/'))
         return Path(path)
+    @property
+    def _up(self):
+        return self.parent
 
+    @property
+    def name(self):
+        return Path(os.path.basename(self))
     @property
     def _name(self):
-        return Path(os.path.basename(self))
+        return self.name
 
+    @property
+    def stem(self):
+        return Path(os.path.splitext(self)[0])
     @property
     def _stem(self):
-        return Path(os.path.splitext(self)[0])
+        return self.stem
 
+    @property
+    def basestem(self):
+        new = self.stem
+        while new != self:
+            new, self = new.stem, new
+        return new
     @property
     def _basestem(self):
-        new = self._stem
-        while new != self:
-            new, self = new._stem, new
-        return new
+        return self.basestem
 
     @property
-    def _ext(self):
+    def ext(self):
         return Path(os.path.splitext(self)[1])
+    @property
+    def _ext(self):
+        return self.ext
 
     extract = extract
     load_json = load_json
@@ -546,6 +614,9 @@ class Path(str):
     def load_npy(self):
         return np.load(self, allow_pickle=True)
 
+    def load_npz(self):
+        return np.load(self, allow_pickle=True)
+
     def save_npy(self, obj):
         np.save(self, obj)
 
@@ -554,7 +625,7 @@ class Path(str):
             return yaml.safe_load(f)
 
     def save_yaml(self, obj):
-        obj = recurse(obj, lambda x: x._ if isinstance(x, Path) else dict(x) if isinstance(x, Dict) else x)
+        obj = recurse(obj, lambda x: x.str if isinstance(x, Path) else dict(x) if isinstance(x, Dict) else x)
         with open(self, 'w') as f:
             yaml.dump(obj, f, default_flow_style=False, allow_unicode=True)
 
@@ -579,10 +650,10 @@ class Path(str):
         writer.write(self)
 
     def load(self):
-        return eval('self.load_%s' % self._ext[1:])()
+        return eval('self.load_%s' % self.ext[1:])()
 
     def save(self, obj):
-        return eval('self.save_%s' % self._ext[1:])(obj)
+        return eval('self.save_%s' % self.ext[1:])(obj)
 
     def replace_txt(self, replacements, dst=None):
         content = self.load_txt()
@@ -658,6 +729,9 @@ class Namespace(Dict):
 
     def __setattr__(self, key, value):
         self[key] = value
+
+    def new(self, *args, **kwargs):
+        return Namespace({**self, **Namespace(*args, **kwargs)})
 
 ##### Functions for compute
 
