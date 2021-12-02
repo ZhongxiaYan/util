@@ -46,7 +46,8 @@ class Config(Namespace):
             device='cuda' if torch.cuda.is_available() else 'cpu',
             debug=False,
             opt_level='O0',
-            disable_amp=False
+            disable_amp=False,
+            new_logger=False,
         )
 
     def __repr__(self):
@@ -111,7 +112,10 @@ class Config(Namespace):
 
     @main_only
     def log(self, text):
-        logger(self.res if self.logger else None)(text)
+        if self.new_logger:
+            print(text)
+        else:
+            logger(self.res if self.logger else None)(text)
 
     ### Train result saving ###
 
@@ -181,7 +185,7 @@ class Config(Namespace):
         if train and not self.disable_amp:
             # configure mixed precision
             net, opt = amp.initialize(net, opt, opt_level=self.opt_level, loss_scale=self.get('loss_scale'), verbosity=0 if self.opt_level == 'O0' else 1)
-        step = self.set_state(net, opt=opt, step=step)
+        step, total_time = self.set_state(net, opt=opt, step=step)
 
         if self.distributed:
             import apex
@@ -191,10 +195,10 @@ class Config(Namespace):
 
         if train:
             net.train()
-            return net, opt, step
+            return net, opt, step, total_time
         else:
             net.eval()
-            return net, step
+            return net, step, total_time
 
     def load_model(self, step='best', train=False):
         '''
@@ -234,7 +238,9 @@ class Config(Namespace):
     def set_state(self, net, opt=None, step='max', path=None):
         state = self.load_state(step=step, path=path)
         if state is None:
-            return 0
+            if isinstance(step, int) and step > 0:
+                raise FileNotFoundError(f'Found no checkpoint file for step={step}')
+            return 0, 0
         if self.get('append_module_before_load'):
             state['net'] = OrderedDict(('module.' + k, v) for k, v in state['net'].items())
         net.load_state_dict(state['net'])
@@ -245,15 +251,15 @@ class Config(Namespace):
                 self.log('No state for optimizer to load')
         if 'amp' in state and self.opt_level != 'O0':
             amp.load_state_dict(state['amp'])
-        return state.get('step', 0)
+        return state.get('step', 0), state.get('total_time', 0)
 
     @main_only
-    def get_state(self, net, opt, step):
+    def get_state(self, net, opt, step, total_time=None):
         try:
             net_dict = net.module.state_dict()
         except AttributeError:
             net_dict = net.state_dict()
-        state = dict(step=step, net=net_dict, opt=opt.state_dict())
+        state = dict(step=step, net=net_dict, opt=opt.state_dict(), total_time=total_time)
         try:
             state['amp'] = amp.state_dict()
         except:

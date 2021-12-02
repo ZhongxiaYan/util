@@ -304,7 +304,7 @@ def log(text):
 class Logger:
     def __init__(self, base_name, prev_time=0):
         self.start_time = time() - prev_time
-        self.save_path = base_name + f'_{datetime.now().isoformat(timespec="second")}.csv'
+        self.save_path = base_name + f'_{datetime.now().isoformat(timespec="seconds")}.csv'
         self.results = []
         self.columns_saved = []
         self.n_prev_saved = 0
@@ -340,10 +340,10 @@ class Logger:
         df_new = pd.DataFrame(results[n_prev_saved:])
         if n_prev_saved == 0 or len(set(df_new.columns) ^ set(columns_saved)):
             df_full = pd.DataFrame(results)
-            df_full.to_csv(self.save_path, header=True, mode='w', index=False)
+            df_full.to_csv(self.save_path, header=True, mode='w', index=False, float_format='%.5g')
             self.columns_saved = list(df_full.columns)
         else:
-            df_new[self.columns_saved].to_csv(self.save_path, header=False, mode='a', index=False)
+            df_new[self.columns_saved].to_csv(self.save_path, header=False, mode='a', index=False, float_format='%.5g')
 
 def installed(pkg):
     out, err = shell('dpkg -l %s' % pkg)
