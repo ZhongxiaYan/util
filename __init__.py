@@ -304,7 +304,7 @@ def log(text):
 class Logger:
     def __init__(self, base_name, prev_time=0):
         self.start_time = time() - prev_time
-        self.save_path = base_name + f'_{datetime.now().isoformat(timespec="seconds")}.parquet'
+        self.save_path = base_name + f'_{datetime.now().isoformat(timespec="seconds")}.feather'
         self.results = []
 
     def log(self, step, result):
@@ -334,7 +334,7 @@ class Logger:
         self.results.append(result)
 
     def save(self):
-        pd.DataFrame(self.results, dtype=np.float64).to_parquet(self.save_path)
+        pd.DataFrame(self.results, dtype=np.float16).to_feather(self.save_path)
 
 def installed(pkg):
     out, err = shell('dpkg -l %s' % pkg)
@@ -626,6 +626,18 @@ class Path(str):
     def save_pth(self, obj):
         torch.save(obj, self)
 
+    def load_feather(self):
+        return pd.read_feather(self)
+
+    def save_feather(self, df):
+        return df.to_feather(self)
+
+    def load_parquet(self):
+        return pd.read_parquet(self)
+
+    def save_parquet(self, df):
+        return df.to_parquet(self)
+
     def load_pdf(self):
         """
         return: PdfReader object.
@@ -792,6 +804,7 @@ def smooth(y, box_pts):
     return y_smooth
 
 def gsmooth(y, sigma):
+    if sigma == 0: return y
     from scipy.ndimage.filters import gaussian_filter1d
     return gaussian_filter1d(y, sigma=sigma)
 
