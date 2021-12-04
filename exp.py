@@ -240,7 +240,7 @@ class Config(Namespace):
         if state is None:
             if isinstance(step, int) and step > 0:
                 raise FileNotFoundError(f'Found no checkpoint file for step={step}')
-            return 0, 0
+            return 0, 0, None
         if self.get('append_module_before_load'):
             state['net'] = OrderedDict(('module.' + k, v) for k, v in state['net'].items())
         net.load_state_dict(state['net'])
