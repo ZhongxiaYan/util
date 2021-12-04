@@ -251,15 +251,15 @@ class Config(Namespace):
                 self.log('No state for optimizer to load')
         if 'amp' in state and self.opt_level != 'O0':
             amp.load_state_dict(state['amp'])
-        return state.get('step', 0), state.get('total_time', 0)
+        return state.get('step', 0), state.get('total_time', 0), state.get('exp_params', None)
 
     @main_only
-    def get_state(self, net, opt, step, total_time=None):
+    def get_state(self, net, opt, step, total_time=None, **kwargs):
         try:
             net_dict = net.module.state_dict()
         except AttributeError:
             net_dict = net.state_dict()
-        state = dict(step=step, net=net_dict, opt=opt.state_dict(), total_time=total_time)
+        state = dict(step=step, net=net_dict, opt=opt.state_dict(), total_time=total_time, **kwargs)
         try:
             state['amp'] = amp.state_dict()
         except:
