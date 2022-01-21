@@ -1,6 +1,6 @@
 from __future__ import absolute_import, print_function
 
-import subprocess, sys, os, re, tempfile, zipfile, gzip, io, shutil, string, random, itertools, pickle, json, yaml, gc, inspect
+import subprocess, sys, os, re, tempfile, zipfile, gzip, io, shutil, string, random, itertools, pickle, json, yaml, gc, inspect, signal, traceback
 from itertools import chain, groupby, islice, product, permutations, combinations
 from datetime import datetime
 from time import time
@@ -9,6 +9,7 @@ from glob import glob
 from tqdm import tqdm
 from copy import copy, deepcopy
 from collections import OrderedDict, defaultdict, Counter
+from contextlib import contextmanager
 import q
 qq = q
 import warnings
@@ -142,6 +143,22 @@ def rand_string(length):
     letters = string.ascii_lowercase
     return ''.join(random.choice(letters) for i in range(length))
 
+@contextmanager
+def time_limit(seconds):
+    """
+    try:
+        with time_limit(10):
+            long_function_call()
+    except TimeoutError as e:
+        pass
+    """
+    def signal_handler(signum, frame):
+        raise TimeoutError(f"Timed out after {seconds}")
+    signal.signal(signal.SIGALRM, signal_handler)
+    signal.alarm(seconds)
+    try: yield
+    finally: signal.alarm(0)
+
 nexti = nextk = lambda iterable: next(iter(iterable))
 nextv = lambda dict: next(iter(dict.values()))
 nextkv = lambda dict: next(iter(dict.items()))
@@ -244,7 +261,7 @@ def str2num(s):
 
 def parse_options(defs, *options):
     """
-    Each option takes the form of a string keyvalue. Match keyvalue by the following precedence in defs
+    Each option takes the form of a string keyvalue or tuple of string keyvalue and definition. Match keyvalue by the following precedence in defs
     defs: {
         keyvalue: {config_key: config_value, ...},
         key: None, # implicitly {key: value}
@@ -254,11 +271,13 @@ def parse_options(defs, *options):
     }
     options: [key1value1, key2value2_key3value3, ...]
     """
-    options = flatten([x.split('_') for x in options if x])
-    name = '_'.join(options)
+    options = flatten([x.split('_') if isinstance(x, str) else [x] for x in options if x])
+    name = '_'.join([x if isinstance(x, str) else x[0] for x in options])
     kwargs = {}
     for o in options:
-        if o in defs:
+        if not isinstance(o, str):
+            kwargs.update(o[1])
+        elif o in defs:
             kwargs.update(defs[o])
         else:
             k, v = re.match('([a-zA-Z]*)(.*)', o).groups()
@@ -301,6 +320,7 @@ def log(text):
         with open(_log_path, 'a') as f:
             f.write(text)
             f.write('\n')
+
 class Logger:
     def __init__(self, base_name, prev_time=0):
         self.start_time = time() - prev_time
@@ -426,6 +446,9 @@ class Path(str):
 
     def glob(self, glob_str):
         return [Path(p) for p in glob(self / glob_str, recursive=True)]
+
+    def glob_rest(self, glob_str):
+        return self.parent.glob(f'{self.name}{glob_str}')
 
     def re(self, re_pattern):
         """ Similar to .glob but uses regex pattern """
