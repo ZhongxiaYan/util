@@ -54,6 +54,13 @@ def groupby_(xs, key=None):
         groups[k].append(v)
     return groups
 
+def iter_pairs(iterable):
+    prev, started = None, False
+    for x in iterable:
+        if started:
+            yield prev, x
+        prev, started = x, True
+
 class Dict(dict if version.major == 3 and version.minor >= 6 else OrderedDict):
     def __add__(self, d):
         return Dict(**self).merge(d)
