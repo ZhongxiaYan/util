@@ -216,7 +216,7 @@ def shell(cmd, wait=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
     stderr = stderr or subprocess.DEVNULL
     if not isinstance(cmd, str):
         cmd = ' '.join(cmd)
-    process = subprocess.Popen(cmd, shell=True, stdout=stdout, stderr=stderr)
+    process = subprocess.Popen(cmd, shell=True, stdout=stdout, stderr=stderr, env=os.environ)
     if not wait:
         return process
     out, err = process.communicate()

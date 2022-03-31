@@ -1,0 +1,12 @@
+import argparse
+from PIL import Image
+
+parser = argparse.ArgumentParser(description='')
+parser.add_argument('source', type=str)
+parser.add_argument('dest', type=str)
+parser.add_argument('width', type=int)
+parser.add_argument('height', type=int)
+args = parser.parse_args()
+
+img = Image.open(args.source)
+img.resize((args.width, args.height), resample=Image.BILINEAR).save(args.dest)
