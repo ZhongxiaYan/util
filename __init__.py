@@ -10,8 +10,10 @@ from tqdm import tqdm
 from copy import copy, deepcopy
 from collections import OrderedDict, defaultdict, Counter
 from contextlib import contextmanager
-import q
-qq = q
+try: # Optional debugging tool
+    import q as qq
+except:
+    pass
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -412,7 +414,9 @@ def install(pkgs, root):
     os.chdir(old_cwd)
 
 class Path(str):
-    """"""
+    """
+    Custom version of Python's pathlib.Path
+    """
     @classmethod
     def env(cls, var):
         return Path(os.environ[var])
@@ -976,6 +980,26 @@ try:
                 return np.asscalar(x)
             return x
         return recurse(t, helper)
+
+    def compute_output_shape(input_shape, layers):
+        for layer in layers:
+            if isinstance(layer, nn.Linear):
+                *dims, in_features = input_shape
+                assert in_features == layer.in_features
+                input_shape = (*dims, layer.out_features)
+                continue
+            elif isinstance(layer, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                in_channels, *dims = input_shape
+                assert in_channels == layer.in_channels
+                out_channels = layer.out_channels
+            elif isinstance(layer, (nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d)):
+                in_channels, *dims = input_shape
+                out_channels = in_channels
+            else:
+                continue
+            dims = 1 + (np.array(dims) + 2 * np.array(layer.padding) - np.array(layer.dilation) * (np.array(layer.kernel_size) - 1) - 1) // np.array(layer.stride)
+            input_shape = (out_channels, *dims)
+        return input_shape
 
     def count_params(network, requires_grad=False):
         return sum(p.numel() for p in network.parameters() if not requires_grad or p.requires_grad)
