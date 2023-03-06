@@ -110,9 +110,19 @@ def save_json(path, dict_):
 def format_json(dict_):
     return json.dumps(dict_, indent=4, sort_keys=True)
 
+def convert_yaml(x):
+    if isinstance(x, Path):
+        return x.str
+    elif isinstance(x, dict):
+        return dict((k, convert_yaml(v)) for k, v in x.items())
+    elif isinstance(x, (list, tuple)):
+        return list(map(convert_yaml, x))
+    elif isinstance(x, np.generic):
+        return x.item()
+    return x
+
 def format_yaml(dict_):
-    dict_ = recurse(dict_, lambda x: x.str if isinstance(x, Path) else dict(x) if isinstance(x, Dict) else x)
-    return yaml.dump(dict_)
+    return yaml.dump(convert_yaml(dict_))
 
 def load_text(path, encoding='utf-8'):
     with open(path, 'r', encoding=encoding) as f:
@@ -650,9 +660,8 @@ class Path(str):
             return yaml.safe_load(f)
 
     def save_yaml(self, obj):
-        obj = recurse(obj, lambda x: x.str if isinstance(x, Path) else dict(x) if isinstance(x, Dict) else x)
         with open(self, 'w') as f:
-            yaml.dump(obj, f, default_flow_style=False, allow_unicode=True)
+            yaml.dump(convert_yaml(obj), f, default_flow_style=False, allow_unicode=True)
 
     def load_pth(self):
         return torch.load(self)
