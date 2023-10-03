@@ -1,6 +1,6 @@
 from __future__ import absolute_import, print_function
 
-import subprocess, sys, os, re, tempfile, zipfile, gzip, io, shutil, string, random, itertools, pickle, json, yaml, gc, inspect, signal, traceback
+import argparse, subprocess, sys, os, re, tempfile, zipfile, gzip, io, shutil, string, random, itertools, pickle, json, yaml, gc, inspect, signal, traceback
 from itertools import chain, groupby, islice, product, permutations, combinations
 from datetime import datetime
 from time import time
@@ -322,8 +322,28 @@ def sbatch(cpu=1, gpu=False):
 source ~/.bash_profile
 """
 
+def save_submit(name, *args, cmd, cpu=1, gpu=False, cd=None, print_only=False, dependency=None):
+    sub_path = '_'.join(map(str, [name, *args])) + '.sh'
+    print_cmd = cmd if print_only else f'sbatch{sif(dependency, f" --dependency afterok:{dependency}")} {sub_path}'
+    if cd:
+        print_cmd = f'cd {cd} && {print_cmd}'
+        sub_path = cd / sub_path
+    if print_only:
+        print(print_cmd)
+        return
+    content = '\n'.join([sbatch(cpu=cpu, gpu=gpu), cmd, ''])
+    with open(sub_path, 'w') as f:
+        f.write(content)
+    print(print_cmd) # Note the printed command!
+
 def get_time_log_path():
     return datetime.now().isoformat().replace(':', '_').rsplit('.')[0] + '.log'
+
+def load_config(dir, parent=0):
+    path = dir / 'config.yaml'
+    conf = Namespace(path.load() if path.exists() else {})
+    if parent <= 0: return conf
+    return load_config(dir.real.parent, parent - 1).var(**conf)
 
 _log_path = None
 def logger(directory=None):
@@ -341,9 +361,9 @@ def log(text):
             f.write('\n')
 
 class Logger:
-    def __init__(self, base_name, prev_time=0):
-        self.start_time = time() - prev_time
-        self.save_path = base_name + f'_{datetime.now().isoformat(timespec="seconds")}.feather'
+    def __init__(self, base_name, start_time=None):
+        self.start_time = start_time or time()
+        self.save_path = base_name + f'_{datetime.now().isoformat(timespec="seconds")}.ftr'
         self.results = []
 
     def log(self, step, result):
@@ -353,7 +373,7 @@ class Logger:
 
         is_delim = lambda k: k[0].startswith('_')
         result_groups = [list(group) for is_del, group in groupby(result.items(), is_delim) if not is_del]
-        line_width = terminal_width()
+        line_width = 160
         pre = ' | '.join([datetime.now().isoformat(timespec='seconds'), f'step {step}'])
         pre_w = len(pre)
         shortest_num = lambda v: str1 if len(str1 := f'{v}') <= len(str2 := f'{v:.3g}') else str2
@@ -371,9 +391,14 @@ class Logger:
         sys.stdout.flush()
         result = dict(step=step, **{k: v for k, v in result.items() if not k.startswith('_')})
         self.results.append(result)
+    
+    def sublog(self, step, substep, result):
+        self.results.append(dict(step=step, substep=substep, **result))
 
     def save(self):
-        pd.DataFrame(self.results, dtype=np.float16).to_feather(self.save_path)
+        df = pd.DataFrame(self.results)
+        df = df.astype({k: np.float16 for k in df.columns if k not in ['step', 'substep']})
+        df.to_feather(self.save_path)
 
 def installed(pkg):
     out, err = shell('dpkg -l %s' % pkg)
@@ -825,6 +850,14 @@ if flags.sklearn:
 def split(x, sizes):
     return np.split(x, np.cumsum(sizes[:-1]))
 
+def bootstrap(values, num_resample=1000, confidence=95):
+    mean = values.mean(axis=0)
+    indices = np.random.choice(len(values), size=num_resample * len(values), replace=True).reshape(num_resample, len(values))
+    values = values[indices, ...].mean(axis=1)
+    lower = np.percentile(values, (100 - confidence) / 2, axis=0)
+    upper = np.percentile(values, 100 - (100 - confidence) / 2, axis=0)
+    return mean, lower, upper
+
 def recurse(x, fn):
     if isinstance(x, dict):
         return type(x)((k, recurse(v, fn)) for k, v in x.items())
@@ -1097,24 +1130,3 @@ except ImportError:
     pass
 
 from .exp import Config
-
-# deprecated
-
-if flags.visdom:
-    import visdom
-
-    class Visdom(visdom.Visdom):
-        def line(self, Y, X=None, win=None, env=None, opts={}, update='append', name=None):
-            all_opts = Dict(title=win, showlegend=True).merge(opts)
-            if update == 'remove':
-                all_opts = None
-            super(Visdom, self).line(Y=Y, X=X, win=win, env=env, opts=all_opts, update=update, name=name)
-
-    _visdom_cache = {}
-    def get_visdom(env='main', server=None, port=None, raise_exceptions=True, **kwargs):
-        server = server or os.environ['VISDOM_SERVER']
-        port = port or os.environ['VISDOM_PORT']
-        key = (server, port, env or 'main')
-        if key not in _visdom_cache:
-            _visdom_cache[key] = Visdom(server=server, port=port, env=env, raise_exceptions=raise_exceptions, **kwargs)
-        return _visdom_cache[key]
